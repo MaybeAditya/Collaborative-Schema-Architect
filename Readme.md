@@ -35,13 +35,13 @@ graph LR
     C["Client 2 (React)"] -- "WebSocket (Binary Delta)" --> B
     B -- Broadcast --> A
     B -- Broadcast --> C
-
+```
 Frontend: React Flow + Vite (Port 5173)
 
 Backend: Node.js + Hocuspocus (Port 1234)
 
 Protocol: WebSocket (Full-duplex persistent connection)
-```
+
 🛠️ Installation & Setup
 This is a monorepo containing both the client and the synchronization server.
 
