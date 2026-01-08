@@ -31,7 +31,7 @@ The system follows a strict separation of concerns:
 
 ```mermaid
 graph LR
-    A[Client 1 (React)] -- WebSocket (Binary Delta) --> B((Hocuspocus Server))
-    C[Client 2 (React)] -- WebSocket (Binary Delta) --> B
+    A["Client 1 (React)"] -- "WebSocket (Binary Delta)" --> B(("Hocuspocus Server"))
+    C["Client 2 (React)"] -- "WebSocket (Binary Delta)" --> B
     B -- Broadcast --> A
     B -- Broadcast --> C
