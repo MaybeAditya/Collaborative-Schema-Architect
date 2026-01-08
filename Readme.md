@@ -29,7 +29,7 @@ The system implements a real-time transpiler pipeline:
 ### 3. Architecture
 The system follows a strict separation of concerns:
 
-```mermaid
+ ```mermaid
 graph LR
     A["Client 1 (React)"] -- "WebSocket (Binary Delta)" --> B(("Hocuspocus Server"))
     C["Client 2 (React)"] -- "WebSocket (Binary Delta)" --> B
@@ -41,7 +41,7 @@ Frontend: React Flow + Vite (Port 5173)
 Backend: Node.js + Hocuspocus (Port 1234)
 
 Protocol: WebSocket (Full-duplex persistent connection)
-
+```
 🛠️ Installation & Setup
 This is a monorepo containing both the client and the synchronization server.
 
@@ -69,3 +69,4 @@ Persistence: Integrate Redis adapter for Hocuspocus to persist state to disk.
 Auth: JWT-based room authentication.
 
 Many-to-Many: Auto-detection of M:N relationships to generate join tables.
+
