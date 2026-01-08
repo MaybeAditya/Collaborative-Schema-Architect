@@ -35,3 +35,37 @@ graph LR
     C["Client 2 (React)"] -- "WebSocket (Binary Delta)" --> B
     B -- Broadcast --> A
     B -- Broadcast --> C
+
+Frontend: React Flow + Vite (Port 5173)
+
+Backend: Node.js + Hocuspocus (Port 1234)
+
+Protocol: WebSocket (Full-duplex persistent connection)
+
+🛠️ Installation & Setup
+This is a monorepo containing both the client and the synchronization server.
+
+1. Start the Signaling Server
+The server handles the WebSocket connections and broadcasts binary updates.
+
+Bash
+
+cd collab-server
+npm install
+node server.js
+# Output: Hocuspocus running on port 1234
+2. Start the Frontend Client
+Open a new terminal.
+
+Bash
+
+cd collab-client
+npm install
+npm run dev
+# Output: Local: http://localhost:5173
+🔮 Future Roadmap
+Persistence: Integrate Redis adapter for Hocuspocus to persist state to disk.
+
+Auth: JWT-based room authentication.
+
+Many-to-Many: Auto-detection of M:N relationships to generate join tables.
