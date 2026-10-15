@@ -6,11 +6,15 @@ A real-time database schema editor where multiple people can work on the same de
 
 ## Why I built this
 
-Designing a database schema often involves switching between diagramming tools, SQL editors, and conversations with teammates. When multiple people make changes, keeping everything in sync can become difficult.
+This project started with a suggestion from one of my professors, who had previously worked in the IT industry. He encouraged me to explore a problem beyond the usual college projects: how could developers collaborate more naturally when designing database schemas?
 
-I built Collaborative Schema Architect to explore how real-time collaboration could make this process simpler. The idea is to edit a database schema visually, see changes appear across connected clients, and generate SQL from the schema.
+That conversation got me thinking about the gap between designing a database visually, writing the SQL behind it, and keeping everyone on the team in sync when changes happen. I wanted to see whether these pieces could come together in one place.
 
-This project is also my way of learning how collaborative applications handle shared state and concurrent edits.
+That idea became **Collaborative Schema Architect**.
+
+I built it as a real-time schema editor where multiple users can work on a shared design, see changes synchronize across connected clients, and generate SQL from the schema. Along the way, I explored Yjs, CRDTs, and WebSockets to understand how collaborative applications handle simultaneous edits without constantly overwriting each other's work.
+
+What started as a nudge from my professor turned into an opportunity to learn more about the engineering behind collaborative tools and turn an idea into a deployed, working project.
 
 ## What it does
 
