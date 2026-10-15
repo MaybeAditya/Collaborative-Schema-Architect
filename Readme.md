@@ -1,72 +1,119 @@
 # Collaborative Schema Architect
 
-> A real-time, distributed database design engine. Features multi-user conflict-free synchronization (CRDTs/Yjs), live Graph-to-SQL compilation, and optimistic UI updates.
+A real-time database schema editor where multiple people can work on the same design and see each other's changes.
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Status](https://img.shields.io/badge/status-active-success.svg)
-![Stack](https://img.shields.io/badge/stack-MERN-blueviolet)
+**Live Demo:** [collaborative-schema.vercel.app](https://collaborative-schema.vercel.app/)
 
-## 🚀 The Core Problem
-Designing database schemas in a remote team environment is fragmented. Developers diagram in Miro, write SQL in a separate editor, and manually resolve conflicts when requirements change. 
+## Why I built this
 
-**Schema Architect** unifies this workflow by treating the "Diagram" as the "Source of Truth." It uses **Conflict-free Replicated Data Types (CRDTs)** to ensure that every node movement, column rename, and relationship connection is synced instantly across all connected clients without race conditions.
+Designing a database schema often involves switching between diagramming tools, SQL editors, and conversations with teammates. When multiple people make changes, keeping everything in sync can become difficult.
 
-## ⚡ Technical Highlights
+I built Collaborative Schema Architect to explore how real-time collaboration could make this process simpler. The idea is to edit a database schema visually, see changes appear across connected clients, and generate SQL from the schema.
 
-### 1. Distributed State Management (CRDTs)
-Instead of a traditional REST API that saves "snapshots," this system syncs **state vectors**.
-* **Library:** `Yjs` for the CRDT implementation.
-* **Mechanism:** Uses `Y.Map` for nodes and `Y.Array` for edges.
-* **Benefit:** Mathematical guarantee of eventual consistency. If User A renames a table while User B deletes a column, both operations merge deterministically.
+This project is also my way of learning how collaborative applications handle shared state and concurrent edits.
 
-### 2. The "Reactive Compiler" Pattern
-The system implements a real-time transpiler pipeline:
-1.  **Input:** Listen to `Y.Doc` updates (binary changes).
-2.  **Process:** Construct a Directed Acyclic Graph (DAG) of the schema.
-3.  **Output:** deterministically generate valid `CREATE TABLE` and `FOREIGN KEY` SQL statements.
-* *Performance:* The compiler runs optimally on the client-side, ensuring zero latency between visual changes and code generation.
+## What it does
 
-### 3. Architecture
-The system follows a strict separation of concerns:
+- **Real-time collaboration:** Changes can be synchronized between users connected to the same document.
+- **Visual schema editing:** Design database schemas through a graphical interface.
+- **Conflict-free updates:** Uses Yjs to help merge concurrent changes to shared document state.
+- **SQL generation:** Converts the schema into SQL statements such as `CREATE TABLE` and relationship definitions.
+- **Separate frontend and backend:** The interface and synchronization server run independently.
 
- ```mermaid
-graph LR
-    A["Client 1 (React)"] -- "WebSocket (Binary Delta)" --> B(("Hocuspocus Server"))
-    C["Client 2 (React)"] -- "WebSocket (Binary Delta)" --> B
-    B -- Broadcast --> A
-    B -- Broadcast --> C
+## How it works
+
+The project has three main parts:
+
+- **React + React Flow:** Renders the interface and schema diagram.
+- **Yjs + Hocuspocus:** Manages shared document state and synchronizes updates through WebSockets.
+- **Node.js:** Runs the collaboration server that connects clients.
+
+When someone edits a shared schema, Yjs tracks the changes and Hocuspocus helps synchronize the document with other connected users.
+
+The frontend is built with Vite and deployed on Vercel. The backend runs as a separate service.
+
+## Tech stack
+
+**Frontend:** React, Vite, React Flow, JavaScript
+
+**Collaboration:** Yjs, Hocuspocus, WebSockets
+
+**Backend:** Node.js
+
+**Deployment:** Vercel (frontend) and Render (backend)
+
+## Run it locally
+
+You'll need Node.js and npm installed.
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/MaybeAditya/Collaborative-Schema-Architect.git
+cd Collaborative-Schema-Architect
 ```
-Frontend: React Flow + Vite (Port 5173)
 
-Backend: Node.js + Hocuspocus (Port 1234)
+### 2. Start the backend
 
-Protocol: WebSocket (Full-duplex persistent connection)
+Open a terminal and run:
 
-🛠️ Installation & Setup
-This is a monorepo containing both the client and the synchronization server.
-
-1. Start the Signaling Server
-The server handles the WebSocket connections and broadcasts binary updates.
-
-Bash
-
+```bash
 cd collab-server
 npm install
 node server.js
-# Output: Hocuspocus running on port 1234
-2. Start the Frontend Client
-Open a new terminal.
+```
 
-Bash
+The server should start on port `1234`, unless your configuration specifies another port.
 
+### 3. Start the frontend
+
+Open a second terminal from the repository root:
+
+```bash
 cd collab-client
 npm install
 npm run dev
-# Output: Local: http://localhost:5173
-🔮 Future Roadmap
-Persistence: Integrate Redis adapter for Hocuspocus to persist state to disk.
+```
 
-Auth: JWT-based room authentication.
+Open the local URL printed by Vite, usually `http://localhost:5173`.
 
-Many-to-Many: Auto-detection of M:N relationships to generate join tables.
+Make sure the frontend's collaboration URL points to the backend WebSocket server. For local development, this is typically:
 
+```env
+VITE_COLLAB_URL=ws://127.0.0.1:1234
+```
+
+For production, configure `VITE_COLLAB_URL` in Vercel to use your actual backend WebSocket URL with `wss://`.
+
+## Current limitations
+
+This is a working project, but it is not yet a production-ready database design platform.
+
+- **Data persistence:** The current collaboration server does not provide guaranteed permanent, server-side document storage. If browser-side IndexedDB persistence is enabled, it can retain document state in that browser, but this is not a substitute for server-side storage.
+- **Authentication and permissions:** There is no complete authentication and room-level authorization system yet. The application should not be treated as a secure private workspace.
+- **SQL support:** Generated SQL should be reviewed before being used against a real database. Different database engines have different syntax and constraints.
+- **Reliability:** Reconnection behavior, error handling, and recovery from server failures need more testing.
+- **Scaling:** The current deployment is intended for learning and demonstration, not a large number of concurrent users.
+
+## Things I'd like to improve
+
+- Add server-side persistence so saved schemas can be restored after backend restarts.
+- Support creating, saving, and reopening multiple named schemas.
+- Add authentication and permissions for shared documents.
+- Improve SQL validation and support for different database engines.
+- Add tests for concurrent edits, reconnections, and document recovery.
+- Explore schema version history and change comparisons.
+
+## What I learned
+
+Building this project helped me explore shared state, CRDTs, WebSocket communication, frontend/backend integration, and deploying a real-time application.
+
+It also made me think about an important distinction: synchronizing changes between connected users is not the same as reliably saving those changes for the future.
+
+## Contributing
+
+This project is a learning project, and suggestions or constructive feedback are welcome. Feel free to open an issue to discuss a bug or a possible improvement.
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
