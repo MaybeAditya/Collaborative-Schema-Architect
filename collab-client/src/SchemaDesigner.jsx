@@ -10,9 +10,13 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import * as Y from 'yjs';
 import { HocuspocusProvider } from '@hocuspocus/provider';
+import { IndexeddbPersistence } from 'y-indexeddb';
 import TableNode from './TableNode';
 
 const nodeTypes = { table: TableNode };
+
+// Keep this in sync with the Hocuspocus room name below.
+const COLLAB_ROOM = 'schema-room-v3';
 
 const SchemaDesigner = () => {
     const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -25,41 +29,100 @@ const SchemaDesigner = () => {
     const yEdgesMap = useRef(null); // NEW: Store connections
 
     useEffect(() => {
-        const provider = new HocuspocusProvider({
-            url: 'ws://127.0.0.1:1234',
-            name: 'schema-room-v3', // Bump version to clear old "random" data
-            document: ydoc,
+        // Browser-side persistence restores this Y.Doc after a page refresh.
+        // Hocuspocus still handles real-time synchronization with other users.
+        const localPersistence = new IndexeddbPersistence(COLLAB_ROOM, ydoc);
+        localPersistence.on('synced', () => {
+            console.info('[persistence] Local schema state restored from IndexedDB');
         });
-        providerRef.current = provider;
 
         yNodesMap.current = ydoc.getMap('project-nodes');
         yEdgesMap.current = ydoc.getMap('project-edges');
 
-        // 1. SYNC NODES
-        yNodesMap.current.observe(() => {
+        // Keep React Flow in sync with the shared Yjs maps.
+        const syncNodes = () => {
             const newNodes = Array.from(yNodesMap.current.values()).map(node => ({
                 ...node,
                 data: {
                     ...node.data,
-                    // Attach interactive functions to the data object
                     onChangeLabel: (val) => updateNodeLabel(node.id, val),
                     onAddColumn: () => addColumn(node.id)
                 }
             }));
             setNodes(newNodes);
             generateSQL(newNodes, Array.from(yEdgesMap.current.values()));
-        });
+        };
 
-        // 2. SYNC EDGES (The Strings!)
-        yEdgesMap.current.observe(() => {
+        const syncEdges = () => {
             const newEdges = Array.from(yEdgesMap.current.values());
             setEdges(newEdges);
-            // Regenerate SQL when connections change
             generateSQL(Array.from(yNodesMap.current.values()), newEdges);
-        });
+        };
 
-        return () => provider.destroy();
+        yNodesMap.current.observe(syncNodes);
+        yEdgesMap.current.observe(syncEdges);
+
+        // Render existing Yjs content as well (including state already in memory).
+        syncNodes();
+        syncEdges();
+
+        const provider = new HocuspocusProvider({
+            url: import.meta.env.VITE_COLLAB_URL || 'ws://127.0.0.1:1234',
+            name: COLLAB_ROOM,
+            document: ydoc,
+        });
+        providerRef.current = provider;
+
+        return () => {
+            yNodesMap.current?.unobserve(syncNodes);
+            yEdgesMap.current?.unobserve(syncEdges);
+            provider.destroy();
+            localPersistence.destroy();
+            providerRef.current = null;
+        };
     }, []);
+
+    // Keep React Flow's state handling, and persist final node positions/removals.
+    const handleNodesChange = useCallback((changes) => {
+        onNodesChange(changes);
+
+        changes.forEach((change) => {
+            // Persist the final position rather than every drag-frame update.
+            if (change.type === 'position' && change.position && change.dragging !== true) {
+                const currentNode = yNodesMap.current?.get(change.id);
+                if (currentNode && (
+                    currentNode.position?.x !== change.position.x ||
+                    currentNode.position?.y !== change.position.y
+                )) {
+                    yNodesMap.current.set(change.id, {
+                        ...currentNode,
+                        position: { ...change.position },
+                    });
+                }
+            }
+
+            if (change.type === 'remove') {
+                yNodesMap.current?.delete(change.id);
+                // Remove relationships to a table when that table is deleted.
+                if (yEdgesMap.current) {
+                    for (const [edgeId, edge] of Array.from(yEdgesMap.current.entries())) {
+                        if (edge.source === change.id || edge.target === change.id) {
+                            yEdgesMap.current.delete(edgeId);
+                        }
+                    }
+                }
+            }
+        });
+    }, [onNodesChange]);
+
+    const handleEdgesChange = useCallback((changes) => {
+        onEdgesChange(changes);
+        changes.forEach((change) => {
+            if (change.type === 'remove') {
+                yEdgesMap.current?.delete(change.id);
+            }
+        });
+    }, [onEdgesChange]);
 
     // --- ACTIONS ---
 
@@ -153,8 +216,8 @@ const SchemaDesigner = () => {
                     nodes={nodes}
                     edges={edges}
                     nodeTypes={nodeTypes}
-                    onNodesChange={onNodesChange}
-                    onEdgesChange={onEdgesChange}
+                    onNodesChange={handleNodesChange}
+                    onEdgesChange={handleEdgesChange}
                     onConnect={onConnect} // This enables the "String" dragging
                     fitView
                 >

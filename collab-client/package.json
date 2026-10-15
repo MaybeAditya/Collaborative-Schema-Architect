@@ -16,7 +16,8 @@
     "react-dom": "^19.2.0",
     "reactflow": "^11.11.4",
     "y-monaco": "^0.1.6",
-    "yjs": "^13.6.28"
+    "yjs": "^13.6.28",
+    "y-indexeddb": "^9.0.12"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
