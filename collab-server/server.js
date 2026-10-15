@@ -1,12 +1,14 @@
 const { Server } = require('@hocuspocus/server');
 
-// FIX: Use 'new Server' instead of 'Server.configure'
+// Render and other hosting providers inject PORT at runtime.
+const port = Number(process.env.PORT) || 1234;
+
 const server = new Server({
-    port: 1234,
-    async onConnect() {
-        console.log('New client connected!');
-    },
+  port,
+  async onConnect() {
+    console.log('New client connected!');
+  },
 });
 
 server.listen();
-console.log('Hocuspocus (CRDT Server) running on port 1234');
+console.log(`Hocuspocus (CRDT Server) listening on port ${port}`);
