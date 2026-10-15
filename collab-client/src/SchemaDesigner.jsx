@@ -1,93 +1,191 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactFlow, {
     useNodesState,
     useEdgesState,
     Background,
     Controls,
     MiniMap,
-    addEdge // Helper to manage connections
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import * as Y from 'yjs';
 import { HocuspocusProvider } from '@hocuspocus/provider';
 import { IndexeddbPersistence } from 'y-indexeddb';
 import TableNode from './TableNode';
+import { generateSQL, normalizeColumn } from './sqlGenerator';
 
 const nodeTypes = { table: TableNode };
+const createId = (prefix) => `${prefix}-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`}`;
+const randomColor = () => `hsl(${Math.floor(Math.random() * 360)} 75% 62%)`;
 
-// Keep this in sync with the Hocuspocus room name below.
-const COLLAB_ROOM = 'schema-room-v3';
+function getDisplayNode(node, actions) {
+    const data = node.data || {};
+    return {
+        ...node,
+        data: {
+            ...data,
+            label: data.label == null ? 'Untitled_Table' : data.label,
+            columns: (Array.isArray(data.columns) ? data.columns : []).map(normalizeColumn),
+            ...actions,
+        },
+    };
+}
 
-const SchemaDesigner = () => {
+const SchemaDesigner = ({ roomId, onChangeRoom }) => {
     const [nodes, setNodes, onNodesChange] = useNodesState([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-    const [sqlCode, setSqlCode] = useState('');
+    const [sqlCode, setSqlCode] = useState('-- Connecting to room…\n');
+    const [connectionStatus, setConnectionStatus] = useState('connecting');
+    const [participants, setParticipants] = useState([]);
+    const [copyLabel, setCopyLabel] = useState('Copy room link');
 
-    const ydoc = useRef(new Y.Doc()).current;
-    const providerRef = useRef(null);
+    const ydoc = useMemo(() => new Y.Doc(), [roomId]);
     const yNodesMap = useRef(null);
-    const yEdgesMap = useRef(null); // NEW: Store connections
+    const yEdgesMap = useRef(null);
+    const providerRef = useRef(null);
+
+    const updateSql = useCallback((nodeValues, edgeValues) => {
+        setSqlCode(generateSQL(nodeValues, edgeValues));
+    }, []);
+
+    const updateNodeLabel = useCallback((id, newLabel) => {
+        const currentNode = yNodesMap.current?.get(id);
+        if (!currentNode) return;
+        yNodesMap.current.set(id, {
+            ...currentNode,
+            data: { ...currentNode.data, label: newLabel },
+        });
+    }, []);
+
+    const updateColumn = useCallback((id, columnIndex, changes) => {
+        const currentNode = yNodesMap.current?.get(id);
+        if (!currentNode) return;
+        const columns = (currentNode.data?.columns || []).map(normalizeColumn);
+        if (!columns[columnIndex]) return;
+        columns[columnIndex] = normalizeColumn({ ...columns[columnIndex], ...changes });
+        yNodesMap.current.set(id, {
+            ...currentNode,
+            data: { ...currentNode.data, columns },
+        });
+    }, []);
+
+    const addColumn = useCallback((id) => {
+        const currentNode = yNodesMap.current?.get(id);
+        if (!currentNode) return;
+        const existing = (currentNode.data?.columns || []).map(normalizeColumn);
+        let index = existing.length + 1;
+        let name = `new_column_${index}`;
+        while (existing.some((column) => column.name.toLowerCase() === name.toLowerCase())) {
+            index += 1;
+            name = `new_column_${index}`;
+        }
+        yNodesMap.current.set(id, {
+            ...currentNode,
+            data: { ...currentNode.data, columns: [...existing, { name, type: 'TEXT', primaryKey: false, notNull: false }] },
+        });
+    }, []);
+
+    const deleteColumn = useCallback((id, columnIndex) => {
+        const currentNode = yNodesMap.current?.get(id);
+        if (!currentNode) return;
+        const columns = (currentNode.data?.columns || []).filter((_, index) => index !== columnIndex).map(normalizeColumn);
+        yNodesMap.current.set(id, {
+            ...currentNode,
+            data: { ...currentNode.data, columns },
+        });
+    }, []);
+
+    const deleteTable = useCallback((id) => {
+        ydoc.transact(() => {
+            yNodesMap.current?.delete(id);
+            if (yEdgesMap.current) {
+                for (const [edgeId, edge] of Array.from(yEdgesMap.current.entries())) {
+                    if (edge.source === id || edge.target === id) yEdgesMap.current.delete(edgeId);
+                }
+            }
+        });
+    }, [ydoc]);
+
+    const updatePresence = useCallback(() => {
+        const provider = providerRef.current;
+        if (!provider?.awareness) return;
+        const online = Array.from(provider.awareness.getStates().entries())
+            .map(([clientId, state]) => ({
+                clientId,
+                name: String(state?.user?.name || 'Collaborator').slice(0, 32),
+                color: String(state?.user?.color || '#8b949e'),
+            }))
+            .filter((person) => person.name);
+        setParticipants(online);
+    }, []);
 
     useEffect(() => {
-        // Browser-side persistence restores this Y.Doc after a page refresh.
-        // Hocuspocus still handles real-time synchronization with other users.
-        const localPersistence = new IndexeddbPersistence(COLLAB_ROOM, ydoc);
-        localPersistence.on('synced', () => {
-            console.info('[persistence] Local schema state restored from IndexedDB');
+        const localPersistence = new IndexeddbPersistence(`schema-room:${roomId}`, ydoc);
+        const nodesMap = ydoc.getMap('project-nodes');
+        const edgesMap = ydoc.getMap('project-edges');
+        yNodesMap.current = nodesMap;
+        yEdgesMap.current = edgesMap;
+
+        const makeActions = (id) => ({
+            onChangeLabel: (value) => updateNodeLabel(id, value),
+            onChangeColumn: (index, changes) => updateColumn(id, index, changes),
+            onAddColumn: () => addColumn(id),
+            onDeleteColumn: (index) => deleteColumn(id, index),
+            onDeleteTable: () => deleteTable(id),
         });
 
-        yNodesMap.current = ydoc.getMap('project-nodes');
-        yEdgesMap.current = ydoc.getMap('project-edges');
-
-        // Keep React Flow in sync with the shared Yjs maps.
         const syncNodes = () => {
-            const newNodes = Array.from(yNodesMap.current.values()).map(node => ({
-                ...node,
-                data: {
-                    ...node.data,
-                    onChangeLabel: (val) => updateNodeLabel(node.id, val),
-                    onAddColumn: () => addColumn(node.id)
-                }
-            }));
-            setNodes(newNodes);
-            generateSQL(newNodes, Array.from(yEdgesMap.current.values()));
+            const rawNodes = Array.from(nodesMap.values());
+            const displayNodes = rawNodes.map((node) => getDisplayNode(node, makeActions(node.id)));
+            setNodes(displayNodes);
+            updateSql(rawNodes, Array.from(edgesMap.values()));
         };
-
         const syncEdges = () => {
-            const newEdges = Array.from(yEdgesMap.current.values());
-            setEdges(newEdges);
-            generateSQL(Array.from(yNodesMap.current.values()), newEdges);
+            const edgeValues = Array.from(edgesMap.values());
+            setEdges(edgeValues);
+            updateSql(Array.from(nodesMap.values()), edgeValues);
         };
 
-        yNodesMap.current.observe(syncNodes);
-        yEdgesMap.current.observe(syncEdges);
-
-        // Render existing Yjs content as well (including state already in memory).
-        syncNodes();
-        syncEdges();
+        nodesMap.observe(syncNodes);
+        edgesMap.observe(syncEdges);
 
         const provider = new HocuspocusProvider({
             url: import.meta.env.VITE_COLLAB_URL || 'ws://127.0.0.1:1234',
-            name: COLLAB_ROOM,
+            name: `schema-room:${roomId}`,
             document: ydoc,
         });
         providerRef.current = provider;
 
+        provider.on('status', ({ status }) => setConnectionStatus(status));
+        const userNumber = Math.floor(1000 + Math.random() * 9000);
+        provider.awareness.setLocalStateField('user', {
+            name: `Designer ${userNumber}`,
+            color: randomColor(),
+        });
+        provider.awareness.on('change', updatePresence);
+        updatePresence();
+
+        // Render existing state, including anything restored from local IndexedDB.
+        syncNodes();
+        syncEdges();
+
         return () => {
-            yNodesMap.current?.unobserve(syncNodes);
-            yEdgesMap.current?.unobserve(syncEdges);
+            nodesMap.unobserve(syncNodes);
+            edgesMap.unobserve(syncEdges);
+            provider.awareness.off('change', updatePresence);
             provider.destroy();
             localPersistence.destroy();
             providerRef.current = null;
+            yNodesMap.current = null;
+            yEdgesMap.current = null;
         };
-    }, []);
+    }, [
+        roomId, ydoc, setNodes, setEdges, updateSql, updateNodeLabel, updateColumn,
+        addColumn, deleteColumn, deleteTable, updatePresence,
+    ]);
 
-    // Keep React Flow's state handling, and persist final node positions/removals.
     const handleNodesChange = useCallback((changes) => {
         onNodesChange(changes);
-
         changes.forEach((change) => {
-            // Persist the final position rather than every drag-frame update.
             if (change.type === 'position' && change.position && change.dragging !== true) {
                 const currentNode = yNodesMap.current?.get(change.id);
                 if (currentNode && (
@@ -102,136 +200,173 @@ const SchemaDesigner = () => {
             }
 
             if (change.type === 'remove') {
-                yNodesMap.current?.delete(change.id);
-                // Remove relationships to a table when that table is deleted.
-                if (yEdgesMap.current) {
-                    for (const [edgeId, edge] of Array.from(yEdgesMap.current.entries())) {
-                        if (edge.source === change.id || edge.target === change.id) {
-                            yEdgesMap.current.delete(edgeId);
-                        }
-                    }
-                }
+                deleteTable(change.id);
             }
         });
-    }, [onNodesChange]);
+    }, [onNodesChange, deleteTable]);
 
     const handleEdgesChange = useCallback((changes) => {
         onEdgesChange(changes);
         changes.forEach((change) => {
-            if (change.type === 'remove') {
-                yEdgesMap.current?.delete(change.id);
-            }
+            if (change.type === 'remove') yEdgesMap.current?.delete(change.id);
         });
     }, [onEdgesChange]);
 
-    // --- ACTIONS ---
-
-    // Handle Connecting Two Tables
     const onConnect = useCallback((params) => {
-        // params contains { source: "node-1", target: "node-2" }
+        if (!yEdgesMap.current || params.source === params.target) return;
         const edgeId = `edge-${params.source}-${params.target}`;
-        const newEdge = { ...params, id: edgeId, type: 'smoothstep', animated: true, style: { stroke: '#007acc' } };
-
-        // Save to Yjs (Everyone sees the line)
-        yEdgesMap.current.set(edgeId, newEdge);
+        yEdgesMap.current.set(edgeId, {
+            ...params,
+            id: edgeId,
+            type: 'smoothstep',
+            animated: true,
+            style: { stroke: '#18a6f6', strokeWidth: 1.5 },
+        });
     }, []);
 
-    // Handle Renaming
-    const updateNodeLabel = (id, newLabel) => {
-        const node = yNodesMap.current.get(id);
-        yNodesMap.current.set(id, {
-            ...node,
-            data: { ...node.data, label: newLabel }
-        });
-    };
-
-    // Handle Adding a Column (Simple implementation)
-    const addColumn = (id) => {
-        const node = yNodesMap.current.get(id);
-        const newCol = { name: 'new_col', type: 'VARCHAR' };
-        yNodesMap.current.set(id, {
-            ...node,
-            data: { ...node.data, columns: [...node.data.columns, newCol] }
-        });
-    };
-
-    const addTable = () => {
-        const id = `table-${Date.now()}`;
+    const addTable = useCallback(() => {
+        const currentNodes = Array.from(yNodesMap.current?.values() || []);
+        const id = createId('table');
+        const columns = [{ name: 'id', type: 'INTEGER', primaryKey: true, notNull: false }];
+        const columnIndex = currentNodes.length;
+        const column = columnIndex % 3;
+        const row = Math.floor(columnIndex / 3);
+        const existingLabels = new Set(currentNodes.map((node) => String(node.data?.label || '').toLowerCase()));
+        let label = 'Untitled_Table';
+        let suffix = 2;
+        while (existingLabels.has(label.toLowerCase())) {
+            label = `Untitled_Table_${suffix}`;
+            suffix += 1;
+        }
         const newNode = {
             id,
             type: 'table',
-            position: { x: Math.random() * 400 + 50, y: Math.random() * 400 + 50 },
-            data: {
-                label: 'Untitled_Table',
-                columns: [{ name: 'id', type: 'INT PK' }] // Initial columns
-            },
+            position: { x: 80 + column * 360, y: 90 + row * 300 },
+            data: { label, columns },
         };
-        yNodesMap.current.set(id, newNode);
+        yNodesMap.current?.set(id, newNode);
+    }, []);
+
+    const copyRoomLink = async () => {
+        const url = `${window.location.origin}/room/${encodeURIComponent(roomId)}`;
+        try {
+            await navigator.clipboard.writeText(url);
+            setCopyLabel('Link copied!');
+            window.setTimeout(() => setCopyLabel('Copy room link'), 1600);
+        } catch {
+            window.prompt('Copy this room link to share the schema:', url);
+        }
     };
 
-    // --- THE COMPILER (Now with Relationships) ---
-    const generateSQL = (nodesList, edgesList) => {
-        if (nodesList.length === 0) return;
-
-        let sql = "-- 🚀 Auto-generated by InterviewSync \n\n";
-
-        nodesList.forEach(node => {
-            const tableName = node.data.label.replace(/\s/g, '_');
-            sql += `CREATE TABLE ${tableName} (\n`;
-
-            // 1. Render Columns
-            node.data.columns.forEach(col => {
-                sql += `  ${col.name} ${col.type},\n`;
-            });
-
-            // 2. Render Foreign Keys (Based on "Strings")
-            // Find edges where THIS node is the Target
-            const incomingEdges = edgesList.filter(e => e.target === node.id);
-
-            incomingEdges.forEach(edge => {
-                // Find the source table name
-                const sourceNode = nodesList.find(n => n.id === edge.source);
-                if (sourceNode) {
-                    const sourceName = sourceNode.data.label;
-                    sql += `  ${sourceName.toLowerCase()}_id INT,\n`;
-                    sql += `  FOREIGN KEY (${sourceName.toLowerCase()}_id) REFERENCES ${sourceName}(id),\n`;
-                }
-            });
-
-            sql = sql.slice(0, -2) + "\n"; // Remove trailing comma
-            sql += `);\n\n`;
-        });
-
-        setSqlCode(sql);
+    const createNewRoom = () => {
+        const newRoomId = Math.random().toString(36).slice(2, 9);
+        onChangeRoom(newRoomId);
     };
 
     return (
-        <div style={{ width: '100vw', height: '100vh', display: 'flex', background: '#0d0d0d' }}>
-            <div style={{ flex: 3, position: 'relative', borderRight: '1px solid #333' }}>
-                <button onClick={addTable} style={{ position: 'absolute', top: 20, left: 20, zIndex: 10, padding: '10px 20px', background: '#007acc', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
-                    + Add Table
-                </button>
+        <main className="app-shell">
+            <header className="topbar">
+                <div className="brand-block">
+                    <div className="brand-mark">S</div>
+                    <div>
+                        <div className="brand-title">Schema Architect</div>
+                        <div className="brand-subtitle">Real-time collaborative database design</div>
+                    </div>
+                </div>
+                <div className="room-tools">
+                    <div className="room-chip"><span className="room-dot" />Room <strong>{roomId}</strong></div>
+                    <div className={`connection-state ${connectionStatus === 'connected' ? 'connected' : ''}`}>
+                        <span />{connectionStatus}
+                    </div>
+                    <button className="button button-secondary" onClick={copyRoomLink}>{copyLabel}</button>
+                    <button className="button button-primary" onClick={createNewRoom}>New room</button>
+                </div>
+            </header>
 
-                <ReactFlow
-                    nodes={nodes}
-                    edges={edges}
-                    nodeTypes={nodeTypes}
-                    onNodesChange={handleNodesChange}
-                    onEdgesChange={handleEdgesChange}
-                    onConnect={onConnect} // This enables the "String" dragging
-                    fitView
-                >
-                    <Background color="#222" gap={20} />
-                    <Controls />
-                    <MiniMap style={{ background: '#111' }} nodeColor="#007acc" />
-                </ReactFlow>
+            <div className="workspace">
+                <section className="canvas-panel" aria-label="Schema canvas">
+                    <div className="canvas-toolbar">
+                        <div>
+                            <h1>Schema canvas</h1>
+                            <p>Drag to arrange · Connect handles to create foreign-key relationships</p>
+                        </div>
+                        <button className="button button-primary" onClick={addTable}>＋ Add table</button>
+                    </div>
+                    <div className="canvas-flow">
+                        <ReactFlow
+                            nodes={nodes}
+                            edges={edges}
+                            nodeTypes={nodeTypes}
+                            onNodesChange={handleNodesChange}
+                            onEdgesChange={handleEdgesChange}
+                            onConnect={onConnect}
+                            deleteKeyCode={['Backspace', 'Delete']}
+                            fitView
+                            fitViewOptions={{ padding: 0.18 }}
+                            minZoom={0.15}
+                            maxZoom={2}
+                        >
+                            <Background color="#27313e" gap={22} size={1} />
+                            <Controls />
+                            <MiniMap
+                                pannable
+                                zoomable
+                                maskColor="rgba(8, 12, 18, 0.72)"
+                                style={{ background: '#0d131c', border: '1px solid #283545' }}
+                                nodeColor="#087fca"
+                            />
+                        </ReactFlow>
+                        {nodes.length === 0 && (
+                            <div className="empty-canvas">
+                                <div className="empty-icon">⌘</div>
+                                <h2>Start with a table</h2>
+                                <p>Add your first table, edit its columns, and connect tables to model relationships.</p>
+                                <button className="button button-primary" onClick={addTable}>＋ Create first table</button>
+                            </div>
+                        )}
+                    </div>
+                </section>
+
+                <aside className="sql-panel">
+                    <div className="sql-header">
+                        <div>
+                            <div className="panel-kicker">OUTPUT</div>
+                            <h2>Generated SQL</h2>
+                        </div>
+                        <button
+                            className="copy-sql-button"
+                            onClick={async () => {
+                                try {
+                                    await navigator.clipboard.writeText(sqlCode);
+                                } catch {
+                                    window.prompt('Copy generated SQL:', sqlCode);
+                                }
+                            }}
+                            title="Copy generated SQL"
+                        >
+                            Copy SQL
+                        </button>
+                    </div>
+                    <p className="sql-description">Updates as you edit the schema.</p>
+                    <pre className="sql-code"><code>{sqlCode}</code></pre>
+                    <div className="sql-footer">Review generated SQL before running it against a real database.</div>
+                </aside>
             </div>
 
-            <div style={{ flex: 1, background: '#111', padding: '20px', overflowY: 'auto', fontFamily: 'monospace' }}>
-                <div style={{ color: '#555', marginBottom: '10px', fontSize: '12px', fontWeight: 'bold' }}>GENERATED SQL</div>
-                <pre style={{ color: '#ce9178', fontSize: '13px', whiteSpace: 'pre-wrap' }}>{sqlCode}</pre>
-            </div>
-        </div>
+            <footer className="statusbar">
+                <div className="status-summary"><span className="status-indicator" />{nodes.length} tables <span className="status-separator">·</span> {edges.length} relationships</div>
+                <div className="presence-list" aria-label="People in this room">
+                    <span className="presence-label">IN ROOM</span>
+                    {participants.slice(0, 4).map((person) => (
+                        <span className="presence-avatar" key={person.clientId} style={{ background: person.color }} title={person.name}>
+                            {person.name.slice(0, 1).toUpperCase()}
+                        </span>
+                    ))}
+                    {participants.length > 4 && <span className="presence-more">+{participants.length - 4}</span>}
+                    <span className="presence-count">{participants.length} online</span>
+                </div>
+            </footer>
+        </main>
     );
 };
 

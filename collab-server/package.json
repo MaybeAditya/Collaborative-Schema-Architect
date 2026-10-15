@@ -3,9 +3,13 @@
   "version": "1.0.0",
   "description": "",
   "main": "server.js",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "test": "node --test persistence.test.js"
   },
   "keywords": [],
   "author": "",
@@ -13,6 +17,7 @@
   "type": "commonjs",
   "dependencies": {
     "@hocuspocus/server": "^3.4.3",
-    "ws": "^8.18.3"
+    "ws": "^8.18.3",
+    "yjs": "^13.6.28"
   }
 }
